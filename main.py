@@ -49,6 +49,12 @@ transform_test = transforms.Compose([
     transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
 ])
 
+transform_test_stl = transforms.Compose([
+    transforms.RandomCrop(32),
+    transforms.ToTensor(),
+    transforms.Normalize(cf.mean['stl10'], cf.std['stl10']),
+])
+
 if(args.dataset == 'cifar10'):
     print("| Preparing CIFAR-10 dataset...")
     sys.stdout.write("| ")
@@ -60,10 +66,12 @@ elif(args.dataset == 'cifar100'):
     sys.stdout.write("| ")
     trainset = torchvision.datasets.CIFAR100(root='/workspace/data', train=True, download=True, transform=transform_train)
     testset = torchvision.datasets.CIFAR100(root='/workspace/data', train=False, download=True, transform=transform_test)
+    testset_stl = torchvision.datasets.STL10('/workspace/data', split="test", transform=transform_test_stl, download=True)
     num_classes = 100
 
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
 testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+testloader_stl = torch.utils.data.DataLoader(testset_stl, batch_size=100, shuffle=False, num_workers=2)
 
 # Return network & file name
 def getNetwork(args):
@@ -174,9 +182,9 @@ def train(epoch):
         correct += predicted.eq(targets.data).cpu().sum()
 
         sys.stdout.write('\r')
-        sys.stdout.write('| Epoch [%3d/%3d] Iter[%3d/%3d]\t\tLoss: %.4f Acc@1: %.3f%% Norm: %.3f'
+        sys.stdout.write('| Epoch [%3d/%3d] Iter[%3d/%3d]\t\tLoss: %.4f Acc@1: %.3f%% Norm: %.3f%% var: %.3f'
                 %(epoch, num_epochs, batch_idx+1,
-                    (len(trainset)//batch_size)+1, loss.item(), 100.*correct/total, norm.mean().item()))
+                    (len(trainset)//batch_size)+1, loss.item(), 100.*correct/total, norm.mean().item(), torch.var(norm).item()))
         sys.stdout.flush()
 
 def test(epoch):
@@ -184,14 +192,26 @@ def test(epoch):
     net.eval()
     net.training = False
     test_loss = 0
+    test_loss_stl = 0
     correct = 0
+    correct_stl = 0
     total = 0
+    total_stl = 0
+    norm_stl = 0
+    var_stl = 0
+    norm_val = 0
+    var_val = 0
+    stl_idx = 0
+    val_idx = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(testloader):
             if use_cuda:
                 inputs, targets = inputs.cuda(), targets.cuda()
             inputs, targets = Variable(inputs), Variable(targets)
             outputs, _, norm = net(inputs)
+            norm_val+= norm.mean().item()
+            var_val+= torch.var(norm).item()
+            val_idx += 1
             loss = criterion(outputs, targets)
 
             test_loss += loss.item()
@@ -201,8 +221,30 @@ def test(epoch):
 
         # Save checkpoint when best model
         acc = 100.*correct/total
-        print("\n| Validation Epoch #%d\t\t\tLoss: %.4f Acc@1: %.2f%% Norm: %.3f" %(epoch, loss.item(), acc, norm.mean().item()))
+        norm_val = norm_val/val_idx
+        var_val = var_val / val_idx
+        print("\n| Validation Epoch #%d\t\t\tLoss: %.4f Acc@1: %.2f%% Norm: %.3f%% VAR: %.3f" %(epoch, loss.item(), acc, norm_val,var_val))
 
+        for batch_idx, (inputs, targets) in enumerate(testloader_stl):
+            if use_cuda:
+                inputs, targets = inputs.cuda(), targets.cuda()
+            inputs, targets = Variable(inputs), Variable(targets)
+            outputs, _, norm = net(inputs)
+            loss = criterion(outputs, targets)
+            norm_stl += norm.mean().item()
+            var_stl += torch.var(norm).item()
+            stl_idx += 1
+
+            test_loss_stl += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total_stl += targets.size(0)
+            correct_stl += predicted.eq(targets.data).cpu().sum()
+
+        # Save checkpoint when best model
+        acc_stl = 100.*correct_stl/total_stl
+        norm_stl = norm_stl/stl_idx
+        var_stl = var_stl/stl_idx
+        print("\n| Validation Epoch stl #%d\t\tLoss: %.4f Acc@1: %.2f%% Norm: %.3f%% VAR: %.3f" %(epoch, loss.item(), acc_stl, norm_stl,var_stl))
         if acc > best_acc:
             print('| Saving Best model...\t\t\tTop1 = %.2f%%' %(acc))
             state = {

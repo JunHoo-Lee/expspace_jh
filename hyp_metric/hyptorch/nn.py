@@ -54,7 +54,7 @@ class HypClassifer(nn.Module):
         self.c = c
         self.weight = nn.Parameter(torch.Tensor(self.num_classes, self.in_features))
         if bias:
-            self.bias = nn.Parameter(torch.Tensor(self.num_classes))
+            self.bias = nn.Parameter(torch.Tensor(self.num_classes,self.in_features))
             self.bias_exp = nn.Parameter(torch.Tensor(self.num_classes))
         else:
             self.register_parameter("bias", None)
@@ -71,13 +71,13 @@ class HypClassifer(nn.Module):
     def forward(self, x):
         # _x = repeat(x, "b d -> b nc d", nc=self.num_classes)
         #x_norm = torch.log(torch.norm(x, dim=-1, keepdim=True) + 1)
-        x_norm = torch.norm(x, dim=-1, keepdim=True)
+        x_norm = torch.norm(x, dim=-1, keepdim=True).detach()
+        #x_norm = torch.norm(x, dim=-1, keepdim=True)
+        w_norm = torch.norm(self.weight, dim=-1, keepdim=True).detach()
+        b_norm = torch.norm(self.bias, dim=-1, keepdim=True)
         # x = x
-        # weight_norm = torch.norm(self.weight, dim=-1, keepdim=True)
-        # weight = self.weight * weight_norm
-        # x_norm = torch.exp(x_norm * self.c)
-        # weight_norm = torch.exp(weight_norm * self.c)
         # norm = x_norm + weight_norm  # [batch, num_classes]
+
 
         # norm = x_norm*weight_norm
 
@@ -88,13 +88,30 @@ class HypClassifer(nn.Module):
         ################# MLR #################
         # eout = x @ self.weight.T + self.bias
         # dist =
-        # out = torch.sign(eout) * weight_norm * dist
+        weight = repeat(self.weight,"c f-> b c f", b =x.shape[0])
+        #w_norm = repeat(w_norm,"c o -> b c o", b=x.shape[0])
+        x = repeat(x,"b f -> b c f", c=self.num_classes)
+        bias = repeat(self.bias,"c f-> b c f", b=x.shape[0])
+        x_norm = repeat(x_norm,"b o -> b c o", c=self.num_classes).detach()
+        b_norm = repeat(b_norm,"c o -> b c o", b=x.shape[0]).detach()
+        x = x + (b_norm*x_norm*bias)/10
+        x = torch.mul(x,weight)
+        #x *= x_norm
+        logits = torch.sum(x, dim=-1, keepdim=False)
+        #logits = logits * w_norm.T
 
-        logits = x @ self.weight.T + self.bias
+        #logits = (x @ self.weight.T) + self.bias
+        #logits = logits + x_norm
+        #sign = torch.sign(logits)
+        #logits = torch.log(torch.abs(logits) + 1)
+        #x_norm = torch.log(x_norm + 1)
+        #logits = torch.abs(logits) + x_norm
+        #logits = sign * logits
+        #logits *= w_norm.T
         # logits = logits * x_norm
         # logits = x + self.bias
         # logits = -x * norm + self.bias
-        return logits, logits * torch.sqrt(x_norm) + self.bias_exp
+        return logits, logits/10
 
 class HypLinear(nn.Module):
     def __init__(self, in_features, out_features, c, bias=True):
